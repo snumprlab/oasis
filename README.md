@@ -1,7 +1,7 @@
 # OASIS: Online Sample Selection for Continual Instruction Tuning
 
 <p align="center">
-  <a href="https://openreview.net/forum?id=0g5Dk4Qfh0">
+  <a href="https://aclanthology.org/2026.acl-long.158/">
     <img src="https://img.shields.io/badge/ACL_2026-Paper-blue" alt="Paper">
   </a>
   <a href="https://github.com/">
