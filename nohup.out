@@ -1,0 +1,104 @@
+eval.sh: line 13: ml: command not found
+no change     /home/user/anaconda3/condabin/conda
+no change     /home/user/anaconda3/bin/conda
+no change     /home/user/anaconda3/bin/conda-env
+no change     /home/user/anaconda3/bin/activate
+no change     /home/user/anaconda3/bin/deactivate
+no change     /home/user/anaconda3/etc/profile.d/conda.sh
+no change     /home/user/anaconda3/etc/fish/conf.d/conda.fish
+no change     /home/user/anaconda3/shell/condabin/Conda.psm1
+no change     /home/user/anaconda3/shell/condabin/conda-hook.ps1
+no change     /home/user/anaconda3/lib/python3.12/site-packages/xontrib/conda.xsh
+no change     /home/user/anaconda3/etc/profile.d/conda.csh
+no change     /home/user/.bashrc
+No action taken.
+
+CondaError: Run 'conda init' before 'conda activate'
+
+eval.sh: line 13: ml: command not found
+no change     /home/user/anaconda3/condabin/conda
+no change     /home/user/anaconda3/bin/conda
+no change     /home/user/anaconda3/bin/conda-env
+no change     /home/user/anaconda3/bin/activate
+no change     /home/user/anaconda3/bin/deactivate
+no change     /home/user/anaconda3/etc/profile.d/conda.sh
+no change     /home/user/anaconda3/etc/fish/conf.d/conda.fish
+no change     /home/user/anaconda3/shell/condabin/Conda.psm1
+no change     /home/user/anaconda3/shell/condabin/conda-hook.ps1
+no change     /home/user/anaconda3/lib/python3.12/site-packages/xontrib/conda.xsh
+no change     /home/user/anaconda3/etc/profile.d/conda.csh
+no change     /home/user/.bashrc
+No action taken.
+
+CondaError: Run 'conda init' before 'conda activate'
+
+eval.sh: line 13: ml: command not found
+no change     /home/user/anaconda3/condabin/conda
+no change     /home/user/anaconda3/bin/conda
+no change     /home/user/anaconda3/bin/conda-env
+no change     /home/user/anaconda3/bin/activate
+no change     /home/user/anaconda3/bin/deactivate
+no change     /home/user/anaconda3/etc/profile.d/conda.sh
+no change     /home/user/anaconda3/etc/fish/conf.d/conda.fish
+no change     /home/user/anaconda3/shell/condabin/Conda.psm1
+no change     /home/user/anaconda3/shell/condabin/conda-hook.ps1
+no change     /home/user/anaconda3/lib/python3.12/site-packages/xontrib/conda.xsh
+no change     /home/user/anaconda3/etc/profile.d/conda.csh
+no change     /home/user/.bashrc
+No action taken.
+
+CondaError: Run 'conda init' before 'conda activate'
+
+eval.sh: line 100: e: command not found
+eval.sh: line 13: ml: command not found
+no change     /home/user/anaconda3/condabin/conda
+no change     /home/user/anaconda3/bin/conda
+no change     /home/user/anaconda3/bin/conda-env
+no change     /home/user/anaconda3/bin/activate
+no change     /home/user/anaconda3/bin/deactivate
+no change     /home/user/anaconda3/etc/profile.d/conda.sh
+no change     /home/user/anaconda3/etc/fish/conf.d/conda.fish
+no change     /home/user/anaconda3/shell/condabin/Conda.psm1
+no change     /home/user/anaconda3/shell/condabin/conda-hook.ps1
+no change     /home/user/anaconda3/lib/python3.12/site-packages/xontrib/conda.xsh
+no change     /home/user/anaconda3/etc/profile.d/conda.csh
+no change     /home/user/.bashrc
+No action taken.
+
+CondaError: Run 'conda init' before 'conda activate'
+
+eval.sh: line 13: ml: command not found
+no change     /home/user/anaconda3/condabin/conda
+no change     /home/user/anaconda3/bin/conda
+no change     /home/user/anaconda3/bin/conda-env
+no change     /home/user/anaconda3/bin/activate
+no change     /home/user/anaconda3/bin/deactivate
+no change     /home/user/anaconda3/etc/profile.d/conda.sh
+no change     /home/user/anaconda3/etc/fish/conf.d/conda.fish
+no change     /home/user/anaconda3/shell/condabin/Conda.psm1
+no change     /home/user/anaconda3/shell/condabin/conda-hook.ps1
+no change     /home/user/anaconda3/lib/python3.12/site-packages/xontrib/conda.xsh
+no change     /home/user/anaconda3/etc/profile.d/conda.csh
+no change     /home/user/.bashrc
+No action taken.
+
+CondaError: Run 'conda init' before 'conda activate'
+
+eval.sh: line 13: ml: command not found
+no change     /home/user/anaconda3/condabin/conda
+no change     /home/user/anaconda3/bin/conda
+no change     /home/user/anaconda3/bin/conda-env
+no change     /home/user/anaconda3/bin/activate
+no change     /home/user/anaconda3/bin/deactivate
+no change     /home/user/anaconda3/etc/profile.d/conda.sh
+no change     /home/user/anaconda3/etc/fish/conf.d/conda.fish
+no change     /home/user/anaconda3/shell/condabin/Conda.psm1
+no change     /home/user/anaconda3/shell/condabin/conda-hook.ps1
+no change     /home/user/anaconda3/lib/python3.12/site-packages/xontrib/conda.xsh
+no change     /home/user/anaconda3/etc/profile.d/conda.csh
+no change     /home/user/.bashrc
+No action taken.
+
+CondaError: Run 'conda init' before 'conda activate'
+
+eval.sh: line 98: syntax error: unexpected end of file
