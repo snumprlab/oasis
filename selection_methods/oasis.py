@@ -68,6 +68,16 @@ if is_accelerate_available():
     if is_deepspeed_available():
         from accelerate.utils import DeepSpeedSchedulerWrapper
 
+if is_torch_xla_available():
+    from torch_xla.core import xla_model as xm
+    from torch_xla.debug import metrics as met
+    from torch_xla.distributed import xla_multiprocessing as smp
+
+try:
+    from apex import amp
+except ImportError:
+    amp = None
+
 # logger = logging.get_logger(__name__)
 logging.config.fileConfig("./configuration/logging.conf")
 logger = logging.getLogger()
@@ -75,7 +85,7 @@ logger = logging.getLogger()
 _supported_layers = ['Linear']
 
 
-def infogradsimv2_create_trainer(model, tokenizer, training_args, data_module, extra_state_dict_dict, curr_ema=None, curr_ema_var=0, datalist_prob=None, ema_pool=None, return_task_vectors=False):
+def oasis_create_trainer(model, tokenizer, training_args, data_module, extra_state_dict_dict, curr_ema=None, curr_ema_var=0, datalist_prob=None, ema_pool=None, return_task_vectors=False):
     trainer = LLaVATrainerInfoGradSim(model=model,
         ema_ratio=training_args.ema_ratio,
         mode=training_args.mode,
@@ -114,7 +124,7 @@ def infogradsimv2_create_trainer(model, tokenizer, training_args, data_module, e
     return trainer
 
 class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
-    def __init__(self, ema_ratio,mode,client_id, curr_round, task_vector=None, fisher_old=None, fisher_freq=5, return_embedding=None, return_task_vectors=False, selection_method=None, kmeans=None, curr_ema=None, curr_ema_var=0, min_z_score_threshold=0,min_z_score_threshold2=0, max_z_score_threshold=0, start_ema_update_step=0, sample_ratio=0,datalist_prob=None,ema_update_mode=None, info_update_mode=None, ema_average=False, ema_pool=None, ema_pool_size=0, softmax_update_temp=0, mutual_param=1, eval_period=8000,grad_ratio=1,**kwargs):
+    def __init__(self, ema_ratio,mode,client_id, curr_round, task_vector=None, fisher_old=None, fisher_freq=5, return_embedding=None, return_task_vectors=False, selection_method=None, kmeans=None, curr_ema=None, curr_ema_var=0, min_z_score_threshold=0,min_z_score_threshold2=0, max_z_score_threshold=0, start_ema_update_step=0, sample_ratio=0,datalist_prob=None,ema_update_mode=None, info_update_mode=None, ema_average=False, ema_pool=None, ema_pool_size=0, softmax_update_temp=0, mutual_param=1, eval_period=8000, grad_ratio=1, **kwargs):
         super(LLaVATrainerInfoGradSim, self).__init__(client_id=client_id, curr_round=curr_round, task_vector=task_vector, fisher_old=fisher_old, fisher_freq=fisher_freq, return_embedding=return_embedding, return_task_vectors=return_task_vectors, selection_method=selection_method, kmeans=kmeans, **kwargs)
         self.ema_ratio = ema_ratio
         self.mode = mode
@@ -141,11 +151,6 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
         self.max_z_score_threshold = max_z_score_threshold
         self.start_ema_update_step = start_ema_update_step
         self.sample_ratio = sample_ratio
-        # Keep the selection budget exact over all accumulation windows in this
-        # client/round.  A window can be short at the end of a dataloader, so a
-        # fixed per-window floor would otherwise systematically undersample.
-        self.oasis_candidates_seen = 0
-        self.oasis_samples_selected = 0
         self.mutual_param = mutual_param
         
         self.bs = 1
@@ -161,8 +166,11 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
         self.eval_period = eval_period
         
         self.task_mutual = []
+        # Fisher information uses the full gradient; cosine similarity uses
+        # these same sampled coordinates for every example in this trainer.
         self.grad_ratio = grad_ratio
-        self.grad_sample_ind = None
+        self.grad_index = None
+        self.grad_numel = None
 
     
     def train_selected_sample(self, model, d,args, tr_loss, is_last_step_and_steps_less_than_grad_acc):
@@ -174,6 +182,7 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
         org_weights = {}
         for n, p in self.model.base_model.model.model.layers[-1].mlp.down_proj.base_layer.named_parameters():
             p.requires_grad = True
+            org_weights[n] = p.clone().detach()
         
         with self.accelerator.accumulate(model):
             tr_loss_step, output = self.training_step(model, d, return_outputs=True)
@@ -349,7 +358,7 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
 
         if not delay_optimizer_creation:
             self.create_optimizer_and_scheduler(num_training_steps=max_steps)
-            
+
         self.state = TrainerState()
         self.state.is_hyper_param_search = trial is not None
         self.state.train_batch_size = self._train_batch_size
@@ -619,42 +628,41 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
                         copy_inputs[k] = v.cpu()
                     batch_inputs.append(copy_inputs)
                     
-                    # OASIS uses the Fisher-information score and then applies
-                    # the gradient-similarity penalty below.  The old condition
-                    # only named the score type ("fisher"), leaving `info`
-                    # undefined when OASIS was selected from the launcher.
                     if self.selection_method in ("fisher", "oasis"):
-                        
-                        for n, p in model.base_model.model.model.layers[-1].mlp.down_proj.base_layer.named_parameters():
-                            p.requires_grad = True
 
                         inputs = self._prepare_inputs(inputs)
-                        output = self.model(**inputs, output_hidden_states=True).loss
+                        output = self.model(**inputs, output_hidden_states=True)
+                        loss = output.loss
 
                         info = None
-                        # sample_gradient = []
-                        for n, p in model.base_model.model.model.layers[-1].mlp.down_proj.base_layer.named_parameters():
-                            if p.requires_grad == True:
-                                grad = torch.autograd.grad(output, p, retain_graph=True)[0].clone().detach()
-                                grad = grad.view(-1).to(torch.float32)
-                                # Initialise once and reuse the same coordinates for every
-                                # example so cosine similarities are comparable.
-                                if self.grad_sample_ind is None:
-                                    N = grad.numel()
-                                    k = max(1, int(N * self.grad_ratio))
-                                    self.grad_sample_ind = torch.randperm(N, device=grad.device)[:k]
-                                sample_gradient = grad[self.grad_sample_ind]
-                                # sample_gradient.append(sample_grad)
-                                # if info==None:
-                                info = (grad**2).sum().cpu()
-                                # else:
-                                    # info += (grad**2).sum().cpu()
+                        sample_gradient = []
+                        for n, p in model.base_model.model.model.layers[-1].named_parameters():
+                            if p.requires_grad:
+                                grad = torch.autograd.grad(loss, p, retain_graph=True)[0].detach().flatten().to(torch.float32)
+                                sample_gradient.append(grad)
+                                if info is None:
+                                    info = (grad**2).sum().cpu()
+                                else:
+                                    info += (grad**2).sum().cpu()
+                        if not sample_gradient:
+                            raise RuntimeError("OASIS needs trainable parameters in the last model layer")
                         logger.info(f"step{step} {info.item()}")
                         self.round_info.append(info.item())#[:,0].view(-1))
-                        # batch_gradient.append(torch.cat(sample_gradient))
-                        batch_gradient.append(sample_gradient)
-                            
+                        concat_gradient = torch.cat(sample_gradient)
+
+                        num_elems = concat_gradient.numel()
+                        num_keep = max(1, int(num_elems * self.grad_ratio))
+                        if self.grad_index is None or self.grad_numel != num_elems or self.grad_index.numel() != num_keep:
+                            # Keep the same gradient coordinates for all examples.
+                            self.grad_index = torch.randperm(num_elems, device=concat_gradient.device)[:num_keep]
+                            self.grad_numel = num_elems
+
+                        sub_grad = concat_gradient[self.grad_index]
+                        batch_gradient.append(sub_grad)
+
                         model.zero_grad()
+                    else:
+                        raise ValueError(f"Unsupported OASIS selection method: {self.selection_method}")
 
 
                     if self.ema_average:
@@ -672,12 +680,8 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
                     or
                     is_last_step_and_steps_less_than_grad_acc
                 ):
-                    for n, p in model.base_model.model.model.layers[-1].mlp.down_proj.base_layer.named_parameters():
-                        p.requires_grad = False
-                    
                     batch_info_ind = torch.tensor(batch_info_ind).cuda()
                     batch_info_tensor = torch.stack(batch_info).cuda()
-                    # batch_info_tensor = torch.tensor(batch_info).cuda()
                     
                     if self.curr_ema is None:
                         curr_ema = torch.mean(batch_info_tensor.float())
@@ -686,11 +690,6 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
                         curr_ema = self.curr_ema
                         curr_ema_var = self.curr_ema_var
                     
-                    selected_info = []
-                    selected_indices = []
-                    task_cossim_list = []
-                        
-                    # batch_info_tensor = torch.tensor(batch_info).cuda()
                     original_info = batch_info_tensor.clone()
                     batch_gradient_tensor = torch.stack(batch_gradient)  # [batch_size, grad_dim]
 
@@ -698,51 +697,45 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
                     remaining_indices = list(range(len(batch_info_tensor)))
                     selected_set = []
                     selected_info = []
-                    selected_grads = []
                     
                     max_info = torch.max(original_info)
                     max_z_score = (max_info - curr_ema) / torch.sqrt(curr_ema_var.clamp_min(1e-12))
-                    # while len(selected_set) < len(batch_info_tensor):
-                    while max_z_score > self.min_z_score_threshold:
+                    while remaining_indices and max_z_score > self.min_z_score_threshold:
                         max_idx = torch.argmax(info_temp).item()
-                        # selected_set.append(remaining_indices[max_idx])
-                        selected_set.append(max_idx)
+                        selected_set.append(remaining_indices[max_idx])
                         selected_info.append(info_temp[max_idx])
-                        # selected_grads.append(batch_gradient_tensor[remaining_indices[max_idx]])
-                        selected_grads.append(batch_gradient_tensor[max_idx])
                         new_info_temp = []
                         new_remaining_indices = []
 
                         K = selected_set.copy()
-                        for i, idx in enumerate(range(len(batch_info))):
-                            if idx in remaining_indices:
-                                # if idx == remaining_indices[max_idx]:
-                                if idx == max_idx:
-                                    new_info_temp.append(torch.tensor(-1))
-                                    continue
 
-                                g_i = batch_gradient_tensor[idx]
-                                pairwise_penalty = 0.0
-                                for k_idx in K:
-                                    g_k = batch_gradient_tensor[k_idx]
-                                    pairwise_penalty += F.cosine_similarity(g_k, g_i, dim=0) * batch_info_tensor[k_idx]
+                        for idx in remaining_indices:
+                            if idx == remaining_indices[max_idx]:
+                                continue
 
-                                higher_order_penalty = 0.0
-                                if len(K) >= 2:
-                                    for order in range(2, len(K) + 1):
-                                        for subset in itertools.combinations(K, order):
-                                            g_subset = batch_gradient_tensor[list(subset)]
-                                            avg_g_subset = g_subset.mean(dim=0)
-                                            sim_subset = F.cosine_similarity(avg_g_subset, g_i, dim=0)
-                                            avg_I_subset = torch.mean(batch_info_tensor[list(subset)])
-                                            higher_order_penalty += ((-1) ** order) * sim_subset * avg_I_subset
-                                penalized_info = original_info[idx] - pairwise_penalty + higher_order_penalty
-                                new_info_temp.append(penalized_info.cpu())
-                                new_remaining_indices.append(idx)
-                            else:
-                                new_info_temp.append(torch.tensor(-1))
-                        info_temp = torch.stack(new_info_temp)  # works fine even if len == 1
+                            g_i = batch_gradient_tensor[idx]
+                            pairwise_penalty = 0.0
+                            for k_idx in K:
+                                g_k = batch_gradient_tensor[k_idx]
+                                pairwise_penalty += F.cosine_similarity(g_k, g_i, dim=0) * batch_info_tensor[k_idx]
+
+                            higher_order_penalty = 0.0
+                            if len(K) >= 2:
+                                for order in range(2, len(K) + 1):
+                                    for subset in itertools.combinations(K, order):
+                                        g_subset = batch_gradient_tensor[list(subset)]
+                                        avg_g_subset = g_subset.mean(dim=0)
+                                        sim_subset = F.cosine_similarity(avg_g_subset, g_i, dim=0)
+                                        avg_I_subset = torch.mean(batch_info_tensor[list(subset)])
+                                        higher_order_penalty += ((-1) ** order) * sim_subset * avg_I_subset
+
+                            penalized_info = original_info[idx] - pairwise_penalty + higher_order_penalty
+                            new_info_temp.append(penalized_info)
+                            new_remaining_indices.append(idx)
                         remaining_indices = new_remaining_indices
+                        if not remaining_indices:
+                            break
+                        info_temp = torch.stack(new_info_temp)
                         max_info = torch.max(info_temp)
                         max_z_score = (max_info - curr_ema) / torch.sqrt(curr_ema_var.clamp_min(1e-12))
                         
@@ -752,35 +745,19 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
                         selected_info_tensor = []
                         for ind in range(len(batch_info_tensor)):
                             if ind in remaining_indices:
-                                selected_info_tensor.append(original_info[ind].cpu())
+                                selected_info_tensor.append(original_info[ind])
                             else:
-                                selected_info_tensor.append(selected_info[selected_set.index(ind)].cpu())
+                                selected_info_tensor.append(selected_info[selected_set.index(ind)])
                         selected_info_tensor = torch.stack(selected_info_tensor).cuda()
                     z_scores = (selected_info_tensor - curr_ema) / torch.sqrt(curr_ema_var.clamp_min(1e-12))
-                    sigmoid_scores = torch.sigmoid(z_scores - self.min_z_score_threshold2)
-
-                    # Select exactly SAMPLE_RATIO of the stream cumulatively.
-                    # MIN_Z_SCORE_THRESHOLD2 remains meaningful: it changes the
-                    # relative sampling weights, but no longer makes the total
-                    # amount of downstream training stochastic.  The previous
-                    # implementation compared every item with one shared random
-                    # scalar, which could select far more or fewer than budget.
-                    batch_candidates = len(selected_info_tensor)
-                    target_selected = round(
-                        (self.oasis_candidates_seen + batch_candidates) * self.sample_ratio
-                    )
-                    batch_budget = max(0, target_selected - self.oasis_samples_selected)
-                    batch_budget = min(batch_budget, batch_candidates)
-                    if batch_budget:
-                        final_selected_indices = torch.multinomial(
-                            sigmoid_scores, batch_budget, replacement=False
-                        ).sort().values
-                    else:
-                        final_selected_indices = torch.empty(
-                            0, dtype=torch.long, device=batch_info_tensor.device
-                        )
-                    self.oasis_candidates_seen += batch_candidates
-                    self.oasis_samples_selected += len(final_selected_indices)
+                    # This original sampling rule uses the first threshold for
+                    # both greedy stopping and sigmoid scoring. The draw does
+                    # not enforce sample_ratio or use min_z_score_threshold2.
+                    sigmoid_scores = torch.sigmoid(z_scores - self.min_z_score_threshold)
+                    # One uniform draw is shared by the window: a sample is
+                    # selected only when its sigmoid score exceeds the draw.
+                    rand_val = torch.rand(1).item()
+                    final_selected_indices = torch.nonzero(sigmoid_scores > rand_val).flatten()
                     
                     if len(final_selected_indices) > 0:
                         selected_info = batch_info_tensor[final_selected_indices].tolist()
@@ -1007,8 +984,38 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
         # self.task_vectors = all_reps
         
         return TrainOutput(self.state.global_step, train_loss, metrics)
-    
-    
+
+    @torch.no_grad()
+    def get_grad_penultimate(self, logit, label, weight_last, input_penultimate, norm_layer, hidden_states_before_norm):
+        # Compute probabilities using softmax
+        prob = F.softmax(logit, dim=-1).to(torch.bfloat16)
+
+        # One-hot encode the label
+        oh_label = F.one_hot(label.long(), num_classes=logit.shape[-1]).to(torch.bfloat16)
+
+        # Compute the gradient for the last layer
+        delta = (prob - oh_label) / logit.size(0)
+
+        # Now, compute the gradient for the penultimate layer
+        grad_penultimate_layer = torch.matmul(delta, weight_last)  # Grad w.r.t. the output of the penultimate layer
+
+        hidden_states = hidden_states_before_norm.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        norm_factor = torch.rsqrt(variance + norm_layer.variance_epsilon)
+
+        grad_normalized_hidden_states  = norm_layer.weight * norm_factor * ( 1 - hidden_states * hidden_states / ((variance + norm_layer.variance_epsilon) * hidden_states.size(-1)) )
+
+        grad = grad_penultimate_layer * grad_normalized_hidden_states.to(torch.bfloat16)
+
+        # Compute the gradient w.r.t the weights of the penultimate layer using the input to that layer (penultimate input)
+        # grad_weights_penultimate = torch.matmul(grad[:,:1].T, input_penultimate) # col # Backprop through penultimate
+        # grad_weights_penultimate = torch.matmul(grad.T, input_penultimate[:,:1]) # row  # Backprop through penultimate
+        # grad_weights_penultimate = torch.matmul(grad.T, input_penultimate).mean(dim=-1).view(-1)
+        grad_weights_penultimate = torch.matmul(grad.T, input_penultimate)
+
+        return grad_weights_penultimate
+
+
     def get_shifted_logits_labels(self,batch, outputs):
 
         batch_size = batch['input_ids'].shape[0]

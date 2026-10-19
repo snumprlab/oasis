@@ -12,7 +12,7 @@ from selection_methods.divbs import divbs_create_trainer
 from selection_methods.gradnorm import gradnorm_create_trainer
 
 from selection_methods.sft_org import sft_org_create_trainer
-from selection_methods.oasis import infogradsimv2_create_trainer
+from selection_methods.oasis import oasis_create_trainer
 
 
 
@@ -38,7 +38,7 @@ def select_method(mode: str) -> Tuple[Callable, Callable, Callable, Callable, Di
     elif mode == "sft_org":
         set_state_dict, load_state_dict, create_trainer, aggregate_state_dict = dummy_function, fedavg_load_state_dict, sft_org_create_trainer, fedavg_aggregate_state_dict
     elif mode == 'oasis':
-        set_state_dict, load_state_dict, create_trainer, aggregate_state_dict = dummy_function, fedavg_load_state_dict, infogradsimv2_create_trainer,  fedavg_aggregate_state_dict
+        set_state_dict, load_state_dict, create_trainer, aggregate_state_dict = dummy_function, fedavg_load_state_dict, oasis_create_trainer, fedavg_aggregate_state_dict
     else:
         raise NotImplementedError(mode)
     return set_state_dict, load_state_dict, create_trainer, aggregate_state_dict, extra_modules
