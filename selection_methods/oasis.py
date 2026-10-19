@@ -750,10 +750,10 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
                                 selected_info_tensor.append(selected_info[selected_set.index(ind)])
                         selected_info_tensor = torch.stack(selected_info_tensor).cuda()
                     z_scores = (selected_info_tensor - curr_ema) / torch.sqrt(curr_ema_var.clamp_min(1e-12))
-                    # This original sampling rule uses the first threshold for
-                    # both greedy stopping and sigmoid scoring. The draw does
-                    # not enforce sample_ratio or use min_z_score_threshold2.
-                    sigmoid_scores = torch.sigmoid(z_scores - self.min_z_score_threshold)
+                    # The first threshold stops greedy updates; the second
+                    # shifts the sigmoid scores. This shared draw does not
+                    # enforce sample_ratio.
+                    sigmoid_scores = torch.sigmoid(z_scores - self.min_z_score_threshold2)
                     # One uniform draw is shared by the window: a sample is
                     # selected only when its sigmoid score exceeds the draw.
                     rand_val = torch.rand(1).item()
