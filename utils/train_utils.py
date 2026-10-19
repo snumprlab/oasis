@@ -2,6 +2,8 @@ import torch
 import os
 import logging
 import transformers
+
+ACCESS_TOKEN = os.environ.get("HF_TOKEN")
 from models.llava.language_model.llava_llama import LlavaLlamaForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPTextModel, CLIPProcessor, CLIPModel
 import models.llava.conversation as conversation_lib_llava
