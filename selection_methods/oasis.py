@@ -85,27 +85,6 @@ logger = logging.getLogger()
 _supported_layers = ['Linear']
 
 
-def threshold_for_expected_count(scores, expected_count):
-    """Find the sigmoid shift whose probabilities sum to expected_count."""
-    if expected_count <= 0:
-        return math.inf
-    if expected_count >= len(scores):
-        return -math.inf
-
-    low, high = min(scores) - 40.0, max(scores) + 40.0
-    for _ in range(60):
-        threshold2 = (low + high) / 2
-        expected = sum(
-            1.0 / (1.0 + math.exp(max(-50.0, min(50.0, threshold2 - score))))
-            for score in scores
-        )
-        if expected > expected_count:
-            low = threshold2
-        else:
-            high = threshold2
-    return (low + high) / 2
-
-
 def oasis_create_trainer(model, tokenizer, training_args, data_module, extra_state_dict_dict, curr_ema=None, curr_ema_var=0, datalist_prob=None, ema_pool=None, return_task_vectors=False):
     trainer = LLaVATrainerInfoGradSim(model=model,
         ema_ratio=training_args.ema_ratio,
@@ -358,13 +337,12 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
                 f" {args.max_steps}"
             )
 
-        self.selection_candidate_total = int(num_train_samples)
-        self.selection_target_total = round(self.selection_candidate_total * self.sample_ratio)
         logger.info(
-            "OASIS target: %d/%d candidates (%.4f)",
-            self.selection_target_total,
-            self.selection_candidate_total,
+            "OASIS reference ratio: %.4f (%d expected of %d candidates; threshold2 fixed at %.4f)",
             self.sample_ratio,
+            round(num_train_samples * self.sample_ratio),
+            int(num_train_samples),
+            self.min_z_score_threshold2,
         )
 
         if DebugOption.UNDERFLOW_OVERFLOW in self.args.debug:
@@ -784,47 +762,21 @@ class LLaVATrainerInfoGradSim(LLaVATrainerFEDAVG):
                     z_scores = (selected_info_tensor - curr_ema) / torch.sqrt(curr_ema_var.clamp_min(1e-12))
                     if os.environ.get("OASIS_LOG_Z_SCORES") == "1":
                         logger.info("OASIS_Z_SCORES %s", z_scores.detach().cpu().tolist())
-                    # Shift threshold2 to keep the remaining expected count on
-                    # target, even when the z-score distribution changes.
-                    window_size = len(z_scores)
-                    remaining_candidates = max(
-                        self.selection_candidate_total - self.selection_candidates_seen,
-                        window_size,
-                    )
-                    remaining_target = max(
-                        0, self.selection_target_total - self.selection_samples_selected
-                    )
-                    expected_in_window = remaining_target * window_size / remaining_candidates
-                    threshold2 = threshold_for_expected_count(
-                        z_scores.detach().cpu().tolist(), expected_in_window
-                    )
-                    sigmoid_scores = torch.sigmoid(z_scores - threshold2)
+                    sigmoid_scores = torch.sigmoid(z_scores - self.min_z_score_threshold2)
                     # One uniform draw is shared by the window: a sample is
                     # selected only when its sigmoid score exceeds the draw.
                     rand_val = torch.rand(1).item()
                     final_selected_indices = torch.nonzero(sigmoid_scores > rand_val).flatten()
-
-                    # Keep the global sample budget feasible. These bounds only
-                    # constrain draws that would make the final target impossible.
-                    max_selected = remaining_target
-                    min_selected = max(0, remaining_target - (remaining_candidates - window_size))
-                    if len(final_selected_indices) > max_selected:
-                        ranked = torch.topk(z_scores[final_selected_indices], max_selected).indices
-                        final_selected_indices = final_selected_indices[ranked].sort().values
-                    elif len(final_selected_indices) < min_selected:
-                        final_selected_indices = torch.topk(z_scores, min_selected).indices.sort().values
-
-                    self.selection_candidates_seen += window_size
+                    self.selection_candidates_seen += len(z_scores)
                     self.selection_samples_selected += len(final_selected_indices)
-                    if self.selection_candidates_seen % 128 == 0 or self.selection_candidates_seen >= self.selection_candidate_total:
+                    if self.selection_candidates_seen % 128 == 0 or self.selection_candidates_seen >= num_train_samples:
                         logger.info(
-                            "OASIS selected %d/%d samples (%.4f), target=%d/%d, threshold2=%.4f",
+                            "OASIS selected %d/%d samples (%.4f), reference_ratio=%.4f, threshold2=%.4f",
                             self.selection_samples_selected,
                             self.selection_candidates_seen,
                             self.selection_samples_selected / self.selection_candidates_seen,
-                            self.selection_target_total,
-                            self.selection_candidate_total,
-                            threshold2,
+                            self.sample_ratio,
+                            self.min_z_score_threshold2,
                         )
                     
                     if len(final_selected_indices) > 0:
